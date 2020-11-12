@@ -291,6 +291,7 @@ class TrainedModelBase(dj.Computed):
 
 class TrainedModelWithDataInfoBase(TrainedModelBase):
     class DataInfo(dj.Part):
+        @property
         def definition(self):
             definition = """
             # Contains the data info, stored separately.

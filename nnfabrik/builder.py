@@ -183,10 +183,9 @@ def get_all_parts_with_info(
     trainer_config=None,
 ):
     # override the seed where applicable
-    if seed is not None:
-        for config in (dataset_config, model_config):
-            if config is not None:
-                config.setdefault("seed", seed)
+
+    if seed is not None and "seed" not in dataset_config:
+        dataset_config["seed"] = seed  # override the seed if passed in
 
     dataloaders = None
     if dataset_fn is not None:
