@@ -2,7 +2,12 @@ import datajoint as dj
 import tempfile
 import torch
 import os
-from ..builder import get_all_parts, get_model, get_trainer
+from ..builder import (
+    get_all_parts,
+    get_all_parts_with_info,
+    get_model,
+    get_trainer,
+)
 from ..utility.dj_helpers import make_hash
 from datajoint.fetch import DataJointError
 import warnings
@@ -18,7 +23,7 @@ class TrainedModelBase(dj.Computed):
     * Set the class property `nnfabrik` to point to a module or a dictionary context that contains classes
         for tables corresponding to `Fabrikant`, `Seed`, `Dataset`, `Model`, and `Trainer`. Most commonly, you
         would want to simply pass the resulting module object from `my_nnfabrik` output.
-    * Set the class property `nnfabrik` to "core" -- this will then make this table refer to 
+    * Set the class property `nnfabrik` to "core" -- this will then make this table refer to
         `Fabrikant`, `Seed`, `Dataset`, `Model`, and `Trainer` as found inside `main` module directly. Note that
         this will therefore depend on the shared "core" tables of nnfabrik.
     * Set the values of the following class properties to individually specify the DataJoint table to use:
@@ -97,7 +102,14 @@ class TrainedModelBase(dj.Computed):
             )
             return definition
 
-    def get_full_config(self, key=None, include_state_dict=True, include_trainer=True):
+    def get_full_config(
+        self,
+        key=None,
+        include_model=True,
+        include_state_dict=True,
+        include_dataloader=True,
+        include_trainer=True,
+    ):
         """
         Returns the full configuration dictionary needed to build all components of the network
         training including dataset, model and trainer. The returned dictionary is designed to be
@@ -114,15 +126,17 @@ class TrainedModelBase(dj.Computed):
         if key is None:
             key = self.fetch1("KEY")
 
-        model_fn, model_config = (self.model_table & key).fn_config
-        dataset_fn, dataset_config = (self.dataset_table & key).fn_config
+        ret = dict()
 
-        ret = dict(
-            model_fn=model_fn,
-            model_config=model_config,
-            dataset_fn=dataset_fn,
-            dataset_config=dataset_config,
-        )
+        if include_model:
+            model_fn, model_config = (self.model_table & key).fn_config
+            ret["model_fn"] = model_fn
+            ret["model_config"] = model_config
+
+        if include_dataloader:
+            dataset_fn, dataset_config = (self.dataset_table & key).fn_config
+            ret["dataset_fn"] = dataset_fn
+            ret["dataset_config"] = dataset_config
 
         if include_trainer:
             trainer_fn, trainer_config = (self.trainer_table & key).fn_config
@@ -130,7 +144,7 @@ class TrainedModelBase(dj.Computed):
             ret["trainer_config"] = trainer_config
 
         # if trained model exist and include_state_dict is True
-        if include_state_dict and (self.ModelStorage & key):
+        if include_model and include_state_dict and (self.ModelStorage & key):
             with tempfile.TemporaryDirectory() as temp_dir:
                 state_dict_path = (self.ModelStorage & key).fetch1(
                     "model_state", download_path=temp_dir
@@ -275,6 +289,153 @@ class TrainedModelBase(dj.Computed):
             self.ModelStorage.insert1(key, ignore_extra_fields=True)
 
 
+class TrainedModelWithDataInfoBase(TrainedModelBase):
+    class DataInfo(dj.Part):
+        def definition(self):
+            definition = """
+            # Contains the data info, stored separately.
+            -> master
+            ---
+            data_info:        longblob    # minimal info about dataloader
+            """.format(
+                storage=self._master.storage
+            )
+            return definition
+
+    def load_model(
+        self,
+        key=None,
+        include_dataloader=True,
+        use_data_info=True,
+        get_data_info=True,
+        include_trainer=False,
+        include_state_dict=True,
+        flexible_output=True,
+        seed: int = None,
+    ):
+        """
+        Load a single entry of the model. If state_dict is available, the model will be loaded with state_dict as well.
+        By default the trainer is skipped. Set `include_trainer=True` to also retrieve the trainer function
+        as the third return argument.
+
+        Args:
+            key - specific key against which to retrieve the model. The key must restrict all component
+                  tables into a single entry. If None, will assume that this table is already restricted and
+                  will obtain an existing single entry.
+            include_dataloader - if True, builds the dataloaer and the model, and returns both.
+                                 if False, tries to build the model without requiring dataloader.
+                                    Returns the model only when set to False.
+            include_trainer - If False (default), will not load or return the trainer.
+            include_state_dict - If True, the model is loaded with state_dict if key corresponds to a trained entry.
+            seed - Optional seed. If not given and a corresponding entry exists in self.seed_table, seed is taken from there
+
+        Returns
+            dataloaders - Loaded dictionary (train, test, validation) of dictionary (data_key) of dataloaders
+            model - Loaded model. If key corresponded to an existing entry, it would have also loaded the
+                    state_dict unless load_state_dict=False
+            trainer - Loaded trainer function. This is not returned if include_trainer=False.
+        """
+
+        if not use_data_info and not include_dataloader:
+            raise ValueError(
+                "use_data_info and include_dataloader cannot both be false."
+            )
+
+        if key is None:
+            key = self.fetch1("KEY")
+
+        # if no explicit seed is provided and there is already a corresponding entry in the seed_table
+        # use that seed value
+        if seed is None and len(self.seed_table & key) == 1:
+            seed = (self.seed_table & key).fetch1("seed")
+
+        data_info = None
+        if use_data_info:
+            if (
+                use_data_info is True and self.data_info_table & key
+            ):  # have to load data info
+                data_info = (self.data_info_table & key).fetch1("data_info")
+            else:
+                data_info = use_data_info
+
+            if data_info is None:
+                warnings.warn(
+                    "use_data_info was set but data_info could not be retrieved."
+                    "Falling back to loading dataloaders."
+                )
+
+        # if data_info is None, then actually get dataloaders back
+        config_dict = self.get_full_config(
+            key,
+            include_dataloader=include_dataloader or data_info is None,
+            include_trainer=include_trainer,
+            include_state_dict=include_state_dict,
+        )
+
+        ret = get_all_parts_with_info(
+            **config_dict, seed=seed, get_data_info=get_data_info, data_info=data_info
+        )
+
+        if flexible_output:
+            checks = (include_dataloader, True, include_trainer, get_data_info)
+            ret = tuple(r for c, r, in zip(checks, ret) if c)
+            if len(ret) == 1:
+                ret = ret[0]
+
+        return ret
+
+    def make(self, key):
+        """
+        Given key specifying configuration for dataloaders, model and trainer,
+        trains the model and saves the trained model.
+        """
+        # lookup the fabrikant corresponding to the current DJ user
+        fabrikant_name = self.user_table.get_current_user()
+        seed = (self.seed_table & key).fetch1("seed")
+
+        # load everything
+        dataloaders, model, trainer, data_info = self.load_model(
+            key,
+            get_data_info=True,
+            use_data_info=False,
+            include_trainer=True,
+            include_state_dict=False,
+            seed=seed,
+            flexible_output=False,
+        )
+
+        # define callback with pinging
+        def call_back(**kwargs):
+            self.connection.ping()
+            self.call_back(**kwargs)
+
+        # model training
+        score, output, model_state = trainer(
+            model=model, dataloaders=dataloaders, seed=seed, uid=key, cb=call_back
+        )
+
+        # save resulting model_state into a temporary file to be attached
+        with tempfile.TemporaryDirectory() as temp_dir:
+            orig_key = dict(key)
+            filename = make_hash(key) + ".pth.tar"
+            filepath = os.path.join(temp_dir, filename)
+            torch.save(model_state, filepath)
+
+            key["score"] = score
+            key["output"] = output
+            key["fabrikant_name"] = fabrikant_name
+            comments = []
+            comments.append((self.trainer_table & key).fetch1("trainer_comment"))
+            comments.append((self.model_table & key).fetch1("model_comment"))
+            comments.append((self.dataset_table & key).fetch1("dataset_comment"))
+            key["comment"] = self.comment_delimitter.join(comments)
+            self.insert1(key)
+
+            self.ModelStorage.insert1(dict(orig_key, model_state=filepath))
+            if data_info is not None:
+                self.DataInfo.insert1(dict(orig_key, data_info=data_info))
+
+
 class DataInfoBase(dj.Computed):
     """
     Inherit from this class and decorate with your own schema to create a functional
@@ -284,7 +445,7 @@ class DataInfoBase(dj.Computed):
     * Set the class property `nnfabrik` to point to a module or a dictionary context that contains classes
         for tables corresponding to `Fabrikant` and `Dataset`. Most commonly, you
         would want to simply pass the resulting module object from `my_nnfabrik` output.
-    * Set the class property `nnfabrik` to "core" -- this will then make this table refer to 
+    * Set the class property `nnfabrik` to "core" -- this will then make this table refer to
         `Fabrikant` and `Dataset` as found inside `main` module directly. Note that
         this will therefore depend on the shared "core" tables of nnfabrik.
     * Set the values of the following class properties to individually specify the DataJoint table to use:

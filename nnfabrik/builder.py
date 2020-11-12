@@ -45,6 +45,7 @@ def get_model(
     seed=None,
     state_dict=None,
     strict=True,
+    get_data_info=False,
     data_info=None,
 ):
     """
@@ -67,16 +68,32 @@ def get_model(
     if isinstance(model_fn, str):
         model_fn = resolve_model(model_fn)
 
-    net = (
-        model_fn(dataloaders, seed=seed, **model_config)
-        if data_info is None
-        else model_fn(dataloaders, data_info=data_info, seed=seed, **model_config)
-    )
+    opt_args = dict(seed=seed)
+    if data_info is not None:
+        opt_args["data_info"] = data_info
+
+    if get_data_info:
+        opt_args["get_data_info"] = get_data_info
+
+    try:
+        ret = model_fn(dataloaders, **opt_args, **model_config)
+    except TypeError as e:
+        if "got an unexpected keyword argument 'get_data_info'" in e.args[0]:
+            opt_args.pop("get_data_info")
+            ret = model_fn(dataloaders, **opt_args, **model_config)
+            ret = (ret, None)
+        else:
+            raise e
+
+    if get_data_info:
+        net, data_info = ret
+    else:
+        net = ret
 
     if state_dict is not None:
         load_state_dict(net, state_dict)
 
-    return net
+    return ret
 
 
 def get_data(dataset_fn, dataset_config):
@@ -150,3 +167,76 @@ def get_all_parts(
         return dataloaders, model, trainer
     else:
         return dataloaders, model
+
+
+def get_all_parts_with_info(
+    dataset_fn=None,
+    dataset_config=None,
+    data_info=None,
+    get_data_info=False,
+    model_fn=None,
+    model_config=None,
+    seed=None,
+    state_dict=None,
+    strict=True,
+    trainer_fn=None,
+    trainer_config=None,
+):
+    # override the seed where applicable
+    if seed is not None:
+        for config in (dataset_config, model_config):
+            if config is not None:
+                config.setdefault("seed", seed)
+
+    dataloaders = None
+    if dataset_fn is not None:
+        dataloaders = get_data(dataset_fn, dataset_config)
+
+    model = None
+    if model_fn is not None:
+        if dataloaders is None and data_info is None:
+            raise ValueError(
+                "If dataset_fn is not provided, data_info is necessary to load model"
+            )
+        try:
+            model = get_model(
+                model_fn,
+                model_config,
+                dataloaders=dataloaders,
+                data_info=data_info,
+                get_data_info=get_data_info,
+                seed=seed,
+                state_dict=state_dict,
+                strict=strict,
+            )
+        except TypeError as e:
+            if (
+                "got an unexpected keyword argument 'data_info'" in e.args[0]
+                and dataloaders is None
+            ):
+                raise ValueError(
+                    "Target model_fn does not accept `data_info` but dataloaders is missing"
+                )
+            # explicitly get rid of data_info argument
+            model = get_model(
+                model_fn,
+                model_config,
+                dataloaders=dataloaders,
+                get_data_info=get_data_info,
+                seed=seed,
+                state_dict=state_dict,
+                strict=strict,
+            )
+
+    trainer = None
+    if trainer_fn is not None:
+        trainer = get_trainer(trainer_fn, trainer_config)
+
+    if get_data_info:
+        if model is not None:
+            model, data_info = model
+        else:
+            model, data_info = None, None
+        return dataloaders, model, trainer, data_info
+    else:
+        return dataloaders, model, trainer
