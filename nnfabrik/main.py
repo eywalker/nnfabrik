@@ -134,7 +134,7 @@ class Model(dj.Manual):
 
         Args:
             model_fn (str, Callable): name of a callable object. If name contains multiple parts separated by `.`, this is assumed to be found in a another module and
-                dynamic name resolution will be attempted. Other wise, the name will be checked inside `models` subpackage.
+                dynamic name resolution will be attempted. Otherwise, the name will be checked inside `models` subpackage.
             model_config (dict): Python dictionary containing keyword arguments for the model_fn
             model_comment - Optional comment for the entry.
             model_fabrikant (str): The fabrikant name. Must match an existing entry in Fabrikant table. If ignored, will attempt to resolve Fabrikant based on the database user name for the existing connection.
@@ -183,7 +183,12 @@ class Model(dj.Manual):
         return key
 
     def build_model(
-        self, dataloaders=None, seed=None, key=None, data_info=None, get_data_info=False
+        self,
+        dataloaders=None,
+        seed=None,
+        key=None,
+        data_info=None,
+        return_data_info=False,
     ):
         """
         Builds a Pytorch module by calling the model_fn with the corresponding model_config. The table has to be
@@ -196,10 +201,10 @@ class Model(dj.Manual):
             seed (int) -  random seed
             key (dict) - datajoint key
             data_info (dict) - contains all necessary information about the input in order to build the model.
-            get_data_info (bool, optional): If set to True, attempts to extract data_info back from model. Defaults to False.
+            return_data_info (bool, optional): If set to True, attempts to extract data_info back from model. Defaults to False.
 
         Returns:
-            A PyTorch module. If get_data_info=True, returns a second argument that corresponds to extracted data_info (may be None).
+            A PyTorch module. If return_data_info=True, returns a second argument that corresponds to extracted data_info (may be None).
         """
         if dataloaders is None and data_info is None:
             raise ValueError(
@@ -218,7 +223,7 @@ class Model(dj.Manual):
             dataloaders=dataloaders,
             seed=seed,
             data_info=data_info,
-            get_data_info=get_data_info,
+            return_data_info=return_data_info,
         )
 
 

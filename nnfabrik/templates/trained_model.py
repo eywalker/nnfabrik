@@ -308,7 +308,8 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
         key=None,
         include_dataloader=True,
         use_data_info=True,
-        get_data_info=True,
+        return_data_info=True,
+        fallback_to_dataloader=True,
         include_trainer=False,
         include_state_dict=True,
         flexible_output=True,
@@ -351,19 +352,30 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
             seed = (self.seed_table & key).fetch1("seed")
 
         data_info = None
+        # if use_data_info is not False, try to either retrieve a relevant entry
+        # or assume use_data_info was passed the data_info itself.
+        # if acquiring data_info fails, then determines whether
+        # dataloader should be loaded, to provide enough info the model_fn
         if use_data_info:
             if (
                 use_data_info is True and self.data_info_table & key
             ):  # have to load data info
-                data_info = (self.data_info_table & key).fetch1("data_info")
+                data_info = (self.DataInfo & key).fetch1("data_info")
             else:
                 data_info = use_data_info
 
             if data_info is None:
-                warnings.warn(
-                    "use_data_info was set but data_info could not be retrieved."
-                    "Falling back to loading dataloaders."
-                )
+                if fallback_to_dataloader:
+                    warnings.warn(
+                        "use_data_info was set but data_info could not be retrieved."
+                        "Falling back to loading dataloaders."
+                    )
+                elif not include_dataloader:
+                    raise ValueError(
+                        "Retrieval of data_info failed but include_dataloader=False and"
+                        "fallback_to_dataloader=False. Not enough information is available "
+                        "to successfully build a model"
+                    )
 
         # if data_info is None, then actually get dataloaders back
         config_dict = self.get_full_config(
@@ -374,11 +386,14 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
         )
 
         ret = get_all_parts_with_info(
-            **config_dict, seed=seed, get_data_info=get_data_info, data_info=data_info
+            **config_dict,
+            seed=seed,
+            return_data_info=return_data_info,
+            data_info=data_info
         )
 
         if flexible_output:
-            checks = (include_dataloader, True, include_trainer, get_data_info)
+            checks = (include_dataloader, True, include_trainer, return_data_info)
             ret = tuple(r for c, r, in zip(checks, ret) if c)
             if len(ret) == 1:
                 ret = ret[0]
@@ -397,7 +412,7 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
         # load everything
         dataloaders, model, trainer, data_info = self.load_model(
             key,
-            get_data_info=True,
+            return_data_info=True,
             use_data_info=False,
             include_trainer=True,
             include_state_dict=False,

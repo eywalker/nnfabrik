@@ -1,8 +1,36 @@
+import warnings
 from . import utility
 from functools import partial
 
 from .utility.nnf_helper import split_module_name, dynamic_import
 from .utility.nn_helpers import load_state_dict
+import warnings
+from logging import Logger
+
+logger = Logger(__name__)
+
+# keyword arguments reserved by nnfabrik and would be
+# excluded from config
+SYSTEM_KEYWORDS = {
+    "dataset": ["seed", "return_data_info"],
+    "model": ["seed", "dataloaders", "return_data_info", "data_info"],
+    "trainer": ["seed", "cb", "uid", "dataloaders", "model"],
+}
+
+
+def exclude_system_kw(config, config_type):
+    ret = {}
+    logger.info("Processing {} config".format(config_type))
+    for k, v in config.items():
+        if k in SYSTEM_KEYWORDS[config_type]:
+            logger.warn(
+                "Keyword {} is reserved for system use for {}. Being excluded...".format(
+                    k, config_type
+                )
+            )
+        else:
+            ret[k] = v
+    return ret
 
 
 def resolve_fn(fn_name, default_base):
@@ -45,7 +73,7 @@ def get_model(
     seed=None,
     state_dict=None,
     strict=True,
-    get_data_info=False,
+    return_data_info=False,
     data_info=None,
 ):
     """
@@ -65,6 +93,8 @@ def get_model(
         Resulting nn.Module object.
     """
 
+    model_config = exclude_system_kw(model_config, "model")
+
     if isinstance(model_fn, str):
         model_fn = resolve_model(model_fn)
 
@@ -72,20 +102,20 @@ def get_model(
     if data_info is not None:
         opt_args["data_info"] = data_info
 
-    if get_data_info:
-        opt_args["get_data_info"] = get_data_info
+    if return_data_info:
+        opt_args["return_data_info"] = return_data_info
 
     try:
         ret = model_fn(dataloaders, **opt_args, **model_config)
     except TypeError as e:
-        if "got an unexpected keyword argument 'get_data_info'" in e.args[0]:
-            opt_args.pop("get_data_info")
+        if "got an unexpected keyword argument 'return_data_info'" in e.args[0]:
+            opt_args.pop("return_data_info")
             ret = model_fn(dataloaders, **opt_args, **model_config)
             ret = (ret, None)
         else:
             raise e
 
-    if get_data_info:
+    if return_data_info:
         net, data_info = ret
     else:
         net = ret
@@ -96,22 +126,27 @@ def get_model(
     return ret
 
 
-def get_data(dataset_fn, dataset_config):
+def get_data(dataset_fn, dataset_config, seed=None):
     """
     Resolves `dataset_fn` and invokes the resolved function onto the `dataset_config` configuration dictionary. The resulting
     dataloader will be returned.
 
+    Note that 'seed' argument passed in explicitly overrides 'seed' that may be specified inside `dataset_config`.
+
     Args:
         dataset_fn: string name of the dataloader function path to be resolved. Alternatively, you can pass in a callable object and no name resolution will be performed.
         dataset_config: a dictionary containing keyword arguments to be passed into the resolved `dataset_fn`
+        seed (int, None): seed value to be passed into the dataset_fn.
 
     Returns:
         Result of invoking the resolved `dataset_fn` with `dataset_config` as keyword arguments.
     """
+    dataset_config = exclude_system_kw(dataset_config, "dataset")
+
     if isinstance(dataset_fn, str):
         dataset_fn = resolve_data(dataset_fn)
 
-    return dataset_fn(**dataset_config)
+    return dataset_fn(**dataset_config, seed=seed)
 
 
 def get_trainer(trainer_fn, trainer_config=None):
@@ -126,6 +161,7 @@ def get_trainer(trainer_fn, trainer_config=None):
     Returns:
         Resolved trainer function
     """
+    trainer_config = exclude_system_kw(trainer_config, "trainer")
 
     if isinstance(trainer_fn, str):
         trainer_fn = resolve_trainer(trainer_fn)
@@ -148,10 +184,7 @@ def get_all_parts(
     trainer_config=None,
 ):
 
-    if seed is not None and "seed" not in dataset_config:
-        dataset_config["seed"] = seed  # override the seed if passed in
-
-    dataloaders = get_data(dataset_fn, dataset_config)
+    dataloaders = get_data(dataset_fn, dataset_config, seed=seed)
 
     model = get_model(
         model_fn,
@@ -173,7 +206,7 @@ def get_all_parts_with_info(
     dataset_fn=None,
     dataset_config=None,
     data_info=None,
-    get_data_info=False,
+    return_data_info=False,
     model_fn=None,
     model_config=None,
     seed=None,
@@ -182,14 +215,9 @@ def get_all_parts_with_info(
     trainer_fn=None,
     trainer_config=None,
 ):
-    # override the seed where applicable
-
-    if seed is not None and "seed" not in dataset_config:
-        dataset_config["seed"] = seed  # override the seed if passed in
-
     dataloaders = None
     if dataset_fn is not None:
-        dataloaders = get_data(dataset_fn, dataset_config)
+        dataloaders = get_data(dataset_fn, dataset_config, seed=seed)
 
     model = None
     if model_fn is not None:
@@ -203,7 +231,7 @@ def get_all_parts_with_info(
                 model_config,
                 dataloaders=dataloaders,
                 data_info=data_info,
-                get_data_info=get_data_info,
+                return_data_info=return_data_info,
                 seed=seed,
                 state_dict=state_dict,
                 strict=strict,
@@ -221,7 +249,7 @@ def get_all_parts_with_info(
                 model_fn,
                 model_config,
                 dataloaders=dataloaders,
-                get_data_info=get_data_info,
+                return_data_info=return_data_info,
                 seed=seed,
                 state_dict=state_dict,
                 strict=strict,
@@ -231,7 +259,7 @@ def get_all_parts_with_info(
     if trainer_fn is not None:
         trainer = get_trainer(trainer_fn, trainer_config)
 
-    if get_data_info:
+    if return_data_info:
         if model is not None:
             model, data_info = model
         else:
