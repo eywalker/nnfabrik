@@ -5,7 +5,112 @@ from .trained_model import TrainedModelBase
 from .utility import find_object
 
 
-class ScoringBase(dj.Computed):
+class MeasuresBase(dj.Computed):
+    # target dataset table to compute measures for
+    dataset_table = None
+
+    # table level comment
+    table_comment = (
+        "A template table for storing measures / descriptive statistics of the Dataset"
+    )
+
+    @staticmethod
+    def measure_function(dataloaders, per_unit=True):
+        """
+        Args:
+            dataloaders (dict): an nnfabrik dataloader object
+            per_unit (bool): Makes the function either return a unit score, or the grand average score
+
+        Returns:
+            (list, array): a score per unit, from which also the grand average score is calculated
+        """
+        raise NotImplementedError("Scoring Function has to be implemented")
+
+    database = ""  # to suppress DJ related error
+
+    measure_dataset = "test"
+    measure_attribute = "score"
+    function_kwargs = {}
+    data_cache = None
+
+    @property
+    def target_table(self):
+        return self.dataset_table
+
+    @property
+    def definition(self):
+        definition = """
+            # {table_comment}
+            -> self().target_table
+            ---
+            {measure_attribute}:      float     # A template for a computed score of a trained model
+            {measure_attribute}_ts=CURRENT_TIMESTAMP: timestamp    # UTZ timestamp at time of insertion
+            """.format(
+            table_comment=self.table_comment, measure_attribute=self.measure_attribute
+        )
+        return definition
+
+    class Units(dj.Part):
+        @property
+        def definition(self):
+            definition = """
+                # Scores for Individual Neurons
+                -> master
+                unit_index:                   int     # unit index as extracted by the model
+                ---
+                unit_{measure_attribute}:     float   # A template for a computed unit score        
+                """.format(
+                measure_attribute=self._master.measure_attribute
+            )
+            return definition
+
+    def get_dataloaders(self, key=None):
+        if key is None:
+            key = self.fetch1("KEY")
+        dataloaders = (
+            self.dataset_table().get_dataloader(key=key)
+            if self.data_cache is None
+            else self.data_cache.load(key=key)
+        )
+        return dataloaders[self.measure_dataset]
+
+    def get_overall_score(self, unit_scores):
+        return np.mean(unit_scores)
+
+    def insert_unit_scores(self, key, unit_scores):
+        key = key.copy()
+        for unit_index, unit_score in enumerate(unit_scores):
+            key["unit_index"] = unit_index
+            key["unit_{}".format(self.measure_attribute)] = unit_score
+            self.Units.insert1(key, ignore_extra_fields=True)
+
+    def make(self, key):
+        dataloaders = self.get_dataloaders(key=key)
+        unit_scores = self.measure_function(
+            dataloaders=dataloaders, per_unit=True, **self.function_kwargs
+        )
+        key[self.measure_attribute] = self.get_overall_score(unit_scores)
+        self.insert1(key)
+        self.insert_unit_scores(key=key, unit_scores=unit_scores)
+
+
+class SummaryMeasuresBase(MeasuresBase):
+    Units = None
+
+    # table level comment
+    table_comment = (
+        "A template table for storing measures / descriptive statistics of the Dataset"
+    )
+
+    def make(self, key):
+        dataloaders = self.get_dataloaders(key=key)
+        key[self.measure_attribute] = self.measure_function(
+            dataloaders=dataloaders, **self.function_kwargs
+        )
+        self.insert1(key, ignore_extra_fields=True)
+
+
+class ScoringBase(MeasuresBase):
     """
     Inherit from this class and decorate with your own schema to create a functional
     Score table. This serves as a template for all scores that can be computed with a
@@ -45,12 +150,6 @@ class ScoringBase(dj.Computed):
     def dataset_table(self):
         return self.trainedmodel_table.dataset_table
 
-    measure_dataset = "test"
-    measure_attribute = "score"
-    function_kwargs = {}
-    model_cache = None
-    data_cache = None
-
     @staticmethod
     def measure_function(dataloaders, model, per_unit=True):
         """
@@ -64,35 +163,9 @@ class ScoringBase(dj.Computed):
         """
         raise NotImplementedError("Scoring Function has to be implemented")
 
-    # table level comment
-    table_comment = "A template table for storing results/scores of a TrainedModel"
-
     @property
-    def definition(self):
-        definition = """
-            # {table_comment}
-            -> self.trainedmodel_table
-            ---
-            {measure_attribute}:      float     # A template for a computed score of a trained model
-            {measure_attribute}_ts=CURRENT_TIMESTAMP: timestamp    # UTZ timestamp at time of insertion
-            """.format(
-            table_comment=self.table_comment, measure_attribute=self.measure_attribute
-        )
-        return definition
-
-    class Units(dj.Part):
-        @property
-        def definition(self):
-            definition = """
-                # Scores for Individual Neurons
-                -> master
-                unit_index:                   int
-                ---
-                unit_{measure_attribute}:     float   # A template for a computed unit score        
-                """.format(
-                measure_attribute=self._master.measure_attribute
-            )
-            return definition
+    def target_table(self):
+        return self.trainedmodel_table
 
     def get_model(self, key=None):
         if key is None:
@@ -107,26 +180,6 @@ class ScoringBase(dj.Computed):
                 key=key, include_state_dict=True, include_dataloader=False
             )
         return model
-
-    def get_dataloaders(self, key=None):
-        if key is None:
-            key = self.fetch1("KEY")
-        dataloaders = (
-            self.dataset_table().get_dataloader(key=key)
-            if self.data_cache is None
-            else self.data_cache.load(key=key)
-        )
-        return dataloaders[self.measure_dataset]
-
-    def get_overall_score(self, unit_scores):
-        return np.mean(unit_scores)
-
-    def insert_unit_scores(self, key, unit_scores):
-        key = key.copy()
-        for unit_index, unit_score in enumerate(unit_scores):
-            key["unit_index"] = unit_index
-            key["unit_{}".format(self.measure_attribute)] = unit_score
-            self.Units.insert1(key, ignore_extra_fields=True)
 
     def make(self, key):
         dataloaders = self.get_dataloaders(key=key)
@@ -156,72 +209,3 @@ class SummaryScoringBase(ScoringBase):
             model=model, dataloaders=dataloaders, **self.function_kwargs
         )
         self.insert1(key, ignore_extra_fields=True)
-
-
-class MeasuresBase(ScoringBase):
-    trainedmodel_table = None
-    nnfabrik = None
-
-    @property
-    def dataset_table(self):
-        return find_object(self.nnfabrik, "Dataset")
-
-    # table level comment
-    table_comment = (
-        "A template table for storing measures / descriptive statistics of the Dataset"
-    )
-
-    @property
-    def definition(self):
-        definition = """
-            # {table_comment}
-            -> self().dataset_table
-            ---
-            {measure_attribute}:      float     # A template for a computed score of a trained model
-            {measure_attribute}_ts=CURRENT_TIMESTAMP: timestamp    # UTZ timestamp at time of insertion
-            """.format(
-            table_comment=self.table_comment, measure_attribute=self.measure_attribute
-        )
-        return definition
-
-    class Units(dj.Part):
-        @property
-        def definition(self):
-            definition = """
-                # Scores for Individual Neurons
-                -> master
-                unit_index:                   int     # unit index as extracted by the model
-                ---
-                unit_{measure_attribute}:     float   # A template for a computed unit score        
-                """.format(
-                measure_attribute=self._master.measure_attribute
-            )
-            return definition
-
-    def make(self, key):
-
-        dataloaders = self.get_dataloaders(key=key)
-        unit_scores = self.measure_function(
-            dataloaders=dataloaders, per_unit=True, **self.function_kwargs
-        )
-
-        key[self.measure_attribute] = self.get_overall_score(unit_scores)
-        self.insert1(key, ignore_extra_fields=True)
-        self.insert_unit_scores(key=key, unit_scores=unit_scores)
-
-
-class SummaryMeasuresBase(MeasuresBase):
-    Units = None
-
-    # table level comment
-    table_comment = (
-        "A template table for storing measures / descriptive statistics of the Dataset"
-    )
-
-    def make(self, key):
-        dataloaders = self.get_dataloaders(key=key)
-        key[self.measure_attribute] = self.measure_function(
-            dataloaders=dataloaders, **self.function_kwargs
-        )
-        self.insert1(key, ignore_extra_fields=True)
-
