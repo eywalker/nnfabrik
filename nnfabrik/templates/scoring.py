@@ -78,11 +78,13 @@ class MeasuresBase(dj.Computed):
         return np.mean(unit_scores)
 
     def insert_unit_scores(self, key, unit_scores):
-        key = key.copy()
+        keys = []
         for unit_index, unit_score in enumerate(unit_scores):
-            key["unit_index"] = unit_index
-            key["unit_{}".format(self.measure_attribute)] = unit_score
-            self.Units.insert1(key, ignore_extra_fields=True)
+            unit_key = key.copy()
+            unit_key["unit_index"] = unit_index
+            unit_key["unit_{}".format(self.measure_attribute)] = unit_score
+            keys.append(unit_key)
+        self.Units.insert(keys, ignore_extra_fields=True)
 
     def make(self, key):
         dataloaders = self.get_dataloaders(key=key)
