@@ -3,7 +3,6 @@
 import torch
 from torch import nn
 
-from neuralpredictors.training import eval_state
 import numpy as np
 import random
 
@@ -49,33 +48,6 @@ def get_dims_for_loader_dict(dataloaders):
         dict: A dict containing the result of calling `get_io_dims` for each entry of the input dict
     """
     return {k: get_io_dims(v) for k, v in dataloaders.items()}
-
-
-def get_module_output(model, input_shape, use_cuda=True):
-    """
-    Returns the output shape of the model when fed in an array of `input_shape`.
-    Note that a zero array of shape `input_shape` is fed into the model and the
-    shape of the output of the model is returned.
-
-    Args:
-        model (nn.Module): PyTorch module for which to compute the output shape
-        input_shape (tuple): Shape specification for the input array into the model
-        use_cuda (bool, optional): If True, model will be evaluated on CUDA if available. Othewrise
-            model evaluation will take place on CPU. Defaults to True.
-
-    Returns:
-        tuple: output shape of the model
-
-    """
-    # infer the original device
-    initial_device = next(iter(model.parameters())).device
-    device = "cuda" if torch.cuda.is_available() and use_cuda else "cpu"
-    with eval_state(model):
-        with torch.no_grad():
-            input = torch.zeros(1, *input_shape[1:], device=device)
-            output = model.to(device)(input)
-    model.to(initial_device)
-    return output.shape
 
 
 def set_random_seed(seed: int, deterministic: bool = True):
@@ -192,16 +164,12 @@ def load_state_dict(
     if unused and ignore_unused:
         print("Ignored unnecessary keys in pretrained dict:\n" + "\n".join(unused))
     elif unused:
-        raise RuntimeError(
-            "Error in loading state_dict: Unused keys:\n" + "\n".join(unused)
-        )
+        raise RuntimeError("Error in loading state_dict: Unused keys:\n" + "\n".join(unused))
     missing = set(model_dict.keys()) - set(filtered_state_dict.keys())
     if missing and ignore_missing:
         print("Ignored Missing keys:\n" + "\n".join(missing))
     elif missing:
-        raise RuntimeError(
-            "Error in loading state_dict: Missing keys:\n" + "\n".join(missing)
-        )
+        raise RuntimeError("Error in loading state_dict: Missing keys:\n" + "\n".join(missing))
 
     # 2. overwrite entries in the existing state dict
     updated_model_dict = {}
@@ -211,9 +179,7 @@ def load_state_dict(
                 print("Ignored shape-mismatched parameter:", k)
                 continue
             else:
-                raise RuntimeError(
-                    "Error in loading state_dict: Shape-mismatch for key {}".format(k)
-                )
+                raise RuntimeError("Error in loading state_dict: Shape-mismatch for key {}".format(k))
         updated_model_dict[k] = v
 
     # 3. load the new state dict

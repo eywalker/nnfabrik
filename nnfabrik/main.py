@@ -1,7 +1,6 @@
 import warnings
 import types
-from typing import Union, Optional, MutableMapping
-
+from typing import Union, Optional, MutableMapping, Tuple
 
 import datajoint as dj
 
@@ -15,6 +14,12 @@ from .builder import (
 )
 from .utility.dj_helpers import make_hash, CustomSchema, Schema
 from .utility.nnf_helper import cleanup_numpy_scalar
+
+if "nnfabrik.schema_name" in dj.config:
+    warnings.warn(
+        "use of 'nnfabrik.schema_name' in dj.config is deprecated, use nnfabrik.main.my_nnfabrik function instead",
+        DeprecationWarning,
+    )
 
 
 schema = CustomSchema(dj.config.get("nnfabrik.schema_name", "nnfabrik_core"))
@@ -451,6 +456,7 @@ class Seed(dj.Manual):
 
 def my_nnfabrik(
     schema: Union[str, Schema],
+    additional_tables: Tuple = (),
     use_common_fabrikant: bool = True,
     use_common_seed: bool = False,
     module_name: Optional[str] = None,
@@ -511,7 +517,7 @@ def my_nnfabrik(
     if isinstance(schema, str):
         schema = CustomSchema(schema)
 
-    tables = [Seed, Fabrikant, Model, Dataset, Trainer]
+    tables = [Seed, Fabrikant, Model, Dataset, Trainer] + list(additional_tables)
 
     module = None
     if context is None:

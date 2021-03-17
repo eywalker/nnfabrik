@@ -1,4 +1,3 @@
-import datajoint as dj
 import tempfile
 import torch
 import os
@@ -8,9 +7,10 @@ from ..builder import (
     get_model,
     get_trainer,
 )
-from ..utility.dj_helpers import make_hash
-from datajoint.fetch import DataJointError
 import warnings
+import datajoint as dj
+from datajoint.fetch import DataJointError
+from ..utility.dj_helpers import make_hash
 from .utility import find_object
 
 
@@ -146,9 +146,7 @@ class TrainedModelBase(dj.Computed):
         # if trained model exist and include_state_dict is True
         if include_model and include_state_dict and (self.ModelStorage & key):
             with tempfile.TemporaryDirectory() as temp_dir:
-                state_dict_path = (self.ModelStorage & key).fetch1(
-                    "model_state", download_path=temp_dir
-                )
+                state_dict_path = (self.ModelStorage & key).fetch1("model_state", download_path=temp_dir)
                 ret["state_dict"] = torch.load(state_dict_path)
 
         return ret
@@ -191,9 +189,7 @@ class TrainedModelBase(dj.Computed):
         if seed is None and len(self.seed_table & key) == 1:
             seed = (self.seed_table & key).fetch1("seed")
 
-        config_dict = self.get_full_config(
-            key, include_trainer=include_trainer, include_state_dict=include_state_dict
-        )
+        config_dict = self.get_full_config(key, include_trainer=include_trainer, include_state_dict=include_state_dict)
 
         if not include_dataloader:
             try:
@@ -211,15 +207,13 @@ class TrainedModelBase(dj.Computed):
                 return (
                     (
                         net,
-                        get_trainer(
-                            config_dict["trainer_fn"], config_dict["trainer_config"]
-                        ),
+                        get_trainer(config_dict["trainer_fn"], config_dict["trainer_config"]),
                     )
                     if include_trainer
                     else net
                 )
 
-            except (TypeError, AttributeError, DataJointError):
+            except (TypeError, AttributeError, KeyError, DataJointError):
                 warnings.warn(
                     "Model could not be built without the dataloader. Dataloader will be built in order to create the model. "
                     "Make sure to have an The 'model_fn' also has to be able to"
@@ -254,9 +248,7 @@ class TrainedModelBase(dj.Computed):
         seed = (self.seed_table & key).fetch1("seed")
 
         # load everything
-        dataloaders, model, trainer = self.load_model(
-            key, include_trainer=True, include_state_dict=False, seed=seed
-        )
+        dataloaders, model, trainer = self.load_model(key, include_trainer=True, include_state_dict=False, seed=seed)
 
         # define callback with pinging
         def call_back(**kwargs):
@@ -264,9 +256,7 @@ class TrainedModelBase(dj.Computed):
             self.call_back(**kwargs)
 
         # model training
-        score, output, model_state = trainer(
-            model=model, dataloaders=dataloaders, seed=seed, uid=key, cb=call_back
-        )
+        score, output, model_state = trainer(model=model, dataloaders=dataloaders, seed=seed, uid=key, cb=call_back)
 
         # save resulting model_state into a temporary file to be attached
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -339,9 +329,7 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
         """
 
         if not use_data_info and not include_dataloader:
-            raise ValueError(
-                "use_data_info and include_dataloader cannot both be false."
-            )
+            raise ValueError("use_data_info and include_dataloader cannot both be false.")
 
         if key is None:
             key = self.fetch1("KEY")
@@ -357,9 +345,7 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
         # if acquiring data_info fails, then determines whether
         # dataloader should be loaded, to provide enough info the model_fn
         if use_data_info:
-            if (
-                use_data_info is True and self.data_info_table & key
-            ):  # have to load data info
+            if use_data_info is True and self.data_info_table & key:  # have to load data info
                 data_info = (self.DataInfo & key).fetch1("data_info")
             else:
                 data_info = use_data_info
@@ -385,12 +371,7 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
             include_state_dict=include_state_dict,
         )
 
-        ret = get_all_parts_with_info(
-            **config_dict,
-            seed=seed,
-            return_data_info=return_data_info,
-            data_info=data_info
-        )
+        ret = get_all_parts_with_info(**config_dict, seed=seed, return_data_info=return_data_info, data_info=data_info)
 
         if flexible_output:
             checks = (include_dataloader, True, include_trainer, return_data_info)
@@ -426,9 +407,7 @@ class TrainedModelWithDataInfoBase(TrainedModelBase):
             self.call_back(**kwargs)
 
         # model training
-        score, output, model_state = trainer(
-            model=model, dataloaders=dataloaders, seed=seed, uid=key, cb=call_back
-        )
+        score, output, model_state = trainer(model=model, dataloaders=dataloaders, seed=seed, uid=key, cb=call_back)
 
         # save resulting model_state into a temporary file to be attached
         with tempfile.TemporaryDirectory() as temp_dir:
