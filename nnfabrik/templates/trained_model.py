@@ -157,6 +157,7 @@ class TrainedModelBase(dj.Computed):
         include_dataloader=True,
         include_trainer=False,
         include_state_dict=True,
+        dataloader=None,
         seed: int = None,
     ):
         """
@@ -192,6 +193,7 @@ class TrainedModelBase(dj.Computed):
         config_dict = self.get_full_config(key, include_trainer=include_trainer, include_state_dict=include_state_dict)
 
         if not include_dataloader:
+            
             try:
                 data_info = (self.data_info_table & key).fetch1("data_info")
                 model_config_dict = dict(

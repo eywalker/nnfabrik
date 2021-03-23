@@ -37,4 +37,7 @@ def find_object(context: Union[ModuleType, dict], attribute: str, prop_name: str
     if isinstance(context, ModuleType):
         context = context.__dict__
 
-    return context[attribute]
+    try:
+        return context[attribute]
+    except KeyError:
+        raise AttributeError(f'Attribute {attribute} not found')
