@@ -1,6 +1,7 @@
 import warnings
 import types
 from typing import Union, Optional, MutableMapping, Tuple
+from time import time
 
 import datajoint as dj
 
@@ -462,6 +463,7 @@ def my_nnfabrik(
     module_name: Optional[str] = None,
     context: Optional[MutableMapping] = None,
     spawn_existing_tables: bool = False,
+    skip_check: bool = False,
 ) -> Optional[types.ModuleType]:
     """
     Create a custom nnfabrik module under specified DataJoint schema,
@@ -503,6 +505,8 @@ def my_nnfabrik(
             instead the tables are defined inside the context.
         spawn_existing_tables (bool, optional): If True, perform `spawn_missing_tables` operation
             onto the newly created table. Defaults to False.
+        skip_check (bool, optional): If True, skips checking for overriding table presence in the new schema.
+            Defaults to False.
 
     Raises:
         ValueError: If `use_common_fabrikant` is True but the target `schema` already contains its own
@@ -530,10 +534,11 @@ def my_nnfabrik(
     # spawn all existing tables into the module
     # TODO: replace with a cheaper check operation
     temp_context = context if spawn_existing_tables else {}
-    schema.spawn_missing_classes(temp_context)
+    if spawn_existing_tables or not skip_check:
+        schema.spawn_missing_classes(temp_context)
 
     if use_common_fabrikant:
-        if "Fabrikant" in temp_context:
+        if not skip_check and "Fabrikant" in temp_context:
             raise ValueError(
                 "The schema already contains a Fabrikant table despite setting use_common_fabrikant=True. "
                 "Either rerun with use_common_fabrikant=False or remove the Fabrikant table in the schema"
@@ -543,7 +548,7 @@ def my_nnfabrik(
         tables.remove(Fabrikant)
 
     if use_common_seed:
-        if "Seed" in temp_context:
+        if not skip_check and "Seed" in temp_context:
             raise ValueError(
                 "The schema already contains a Seed table despite setting use_common_seed=True. "
                 "Either rerun with use_common_seed=False or remove the Seed table in the schema"
